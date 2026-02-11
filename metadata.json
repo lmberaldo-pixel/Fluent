@@ -1,0 +1,7 @@
+{
+  "name": "FluentFrench",
+  "description": "Um tutor de francês imersivo com correções verbais em tempo real usando Gemini Live.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
