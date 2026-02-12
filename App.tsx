@@ -6,8 +6,8 @@ import { ConnectionState } from './types';
 // Icons
 const TowerIcon = ({ className = "w-6 h-6" }: { className?: string }) => (
     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 21V9m0 0l-3 3m3-3l3 3m-3-3V5.25a2.25 2.25 0 114.5 0V7.5a.75.75 0 01-.75.75H8.25a.75.75 0 01-.75-.75V5.25a2.25 2.25 0 114.5 0v3.75zM3.375 19.5h17.25m-17.25 3h17.25M9 21v-6h6v6" />
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 2.25a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0V3a.75.75 0 01.75-.75zM12 9l-2.5 5h5L12 9z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 21V9m0 0l-3 3m3-3l3 3m-3-3V5.25a2.25 2.25 0 114.5 0V7.5a.75.75 0 01-.75.75H8.25a.75.75 0 01-.75-.75V5.25a2.25 2.25 0 114.5 0v3.75zM3.375 19.5h17.25m-17.25 3h17.25M9 21v-6h6v6" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 2.25a.75.75 0 01.75.75v1.5a.75.75 0 01-1.5 0V3a.75.75 0 01.75-.75zM12 9l-2.5 5h5L12 9z" />
     </svg>
 );
 
@@ -90,7 +90,7 @@ const App: React.FC = () => {
     return (
         // Using h-[100dvh] ensures it fits the mobile screen correctly even with address bars
         <div className="flex flex-col h-[100dvh] w-full bg-slate-950 text-slate-50 relative overflow-hidden font-sans">
-            
+
             {/* Background Ambience (Blue Theme) */}
             <div className="absolute inset-0 z-0 overflow-hidden pointer-events-none">
                 <div className="absolute top-[-20%] left-[-20%] w-[60%] h-[60%] bg-blue-600/20 rounded-full blur-[120px] mix-blend-screen animate-pulse"></div>
@@ -117,46 +117,44 @@ const App: React.FC = () => {
                         FluentFrench <span className="text-xs md:text-sm font-medium text-slate-400 mx-1.5 lowercase">avec</span> Beraldo
                     </h1>
                 </div>
-                
+
                 <div className="absolute right-4 md:right-6 flex items-center">
-                    <span className={`flex items-center gap-2 px-2 md:px-3 py-1 rounded-full text-xs font-medium border transition-colors duration-300 ${
-                        connectionState === ConnectionState.CONNECTED 
-                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                            : connectionState === ConnectionState.CONNECTING
+                    <span className={`flex items-center gap-2 px-2 md:px-3 py-1 rounded-full text-xs font-medium border transition-colors duration-300 ${connectionState === ConnectionState.CONNECTED
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : connectionState === ConnectionState.CONNECTING
                             ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
                             : 'bg-slate-800 border-slate-700 text-slate-400'
-                    }`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${
-                             connectionState === ConnectionState.CONNECTED ? 'bg-emerald-400 animate-pulse' : 
-                             connectionState === ConnectionState.CONNECTING ? 'bg-amber-400 animate-bounce' : 'bg-slate-500'
-                        }`}></span>
+                        }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${connectionState === ConnectionState.CONNECTED ? 'bg-emerald-400 animate-pulse' :
+                            connectionState === ConnectionState.CONNECTING ? 'bg-amber-400 animate-bounce' : 'bg-slate-500'
+                            }`}></span>
                         <span className="hidden md:inline">
-                            {connectionState === ConnectionState.CONNECTED ? 'Sophie Online' : 
-                             connectionState === ConnectionState.CONNECTING ? 'Conectando...' : 'Offline'}
+                            {connectionState === ConnectionState.CONNECTED ? 'Sophie Online' :
+                                connectionState === ConnectionState.CONNECTING ? 'Conectando...' : 'Offline'}
                         </span>
                         <span className="md:hidden">
-                            {connectionState === ConnectionState.CONNECTED ? 'Online' : 
-                             connectionState === ConnectionState.CONNECTING ? '...' : 'Offline'}
+                            {connectionState === ConnectionState.CONNECTED ? 'Online' :
+                                connectionState === ConnectionState.CONNECTING ? '...' : 'Offline'}
                         </span>
                     </span>
                 </div>
             </header>
 
             {/* Main Content Area - Vertical Layout with DVH calc */}
-            <main className="flex-1 relative z-10 flex flex-col p-2 md:p-4 gap-3 md:gap-4 overflow-hidden h-[calc(100dvh-64px)]">
-                
+            <main className="flex-1 relative z-10 flex flex-col md:flex-row p-2 md:p-4 gap-3 md:gap-4 overflow-hidden h-[calc(100dvh-64px)]">
+
                 {/* Top: Visualizer Area 
-                    Mobile: 35% height to give more room for text
-                    Desktop: 45% height 
+                    Mobile: 35% height
+                    Desktop: Full height, 1/3 width
                 */}
-                <div className="relative w-full h-[35%] md:h-[45%] shrink-0 transition-all duration-500">
+                <div className="relative w-full h-[35%] md:h-full md:w-1/3 shrink-0 transition-all duration-500">
                     <div className="relative w-full h-full bg-slate-900/40 rounded-2xl border border-slate-800/50 overflow-hidden shadow-2xl backdrop-blur-sm flex flex-col">
-                        
+
                         {/* Visualizer Canvas */}
                         <div className="absolute inset-0 z-10 opacity-90">
-                            <Visualizer 
-                                analyser={analyser} 
-                                isActive={connectionState === ConnectionState.CONNECTED} 
+                            <Visualizer
+                                analyser={analyser}
+                                isActive={connectionState === ConnectionState.CONNECTED}
                                 color="#60a5fa" // Blue-400
                             />
                         </div>
@@ -164,12 +162,12 @@ const App: React.FC = () => {
                         {/* Overlay Content */}
                         <div className="relative z-20 flex-1 flex flex-col items-center justify-center p-4 text-center">
                             {/* Persistent Container */}
-                            <div className="space-y-2 md:space-y-6 animate-in fade-in zoom-in duration-500 flex flex-col items-center -translate-y-6 md:-translate-y-4">
+                            <div className="space-y-2 md:space-y-4 animate-in fade-in zoom-in duration-500 flex flex-col items-center -translate-y-6 md:-translate-y-4">
                                 <div className="inline-block p-2 md:p-4 rounded-full bg-slate-800/60 border border-slate-700 shadow-xl shadow-blue-900/20 scale-100 backdrop-blur-md">
-                                    <div className="w-12 h-12 md:w-20 md:h-20 rounded-full bg-gradient-to-tr from-blue-400 to-indigo-500 flex items-center justify-center shadow-inner text-white">
-                                            <div className="w-6 h-6 md:w-10 md:h-10 flex items-center justify-center">
-                                                <TowerIcon className="w-full h-full p-0.5 md:p-1" />
-                                            </div>
+                                    <div className="w-12 h-12 md:w-14 md:h-14 rounded-full bg-gradient-to-tr from-blue-400 to-indigo-500 flex items-center justify-center shadow-inner text-white">
+                                        <div className="w-6 h-6 md:w-8 md:h-8 flex items-center justify-center">
+                                            <TowerIcon className="w-full h-full p-0.5 md:p-1" />
+                                        </div>
                                     </div>
                                 </div>
                                 <div className="rounded-xl backdrop-blur-sm p-1 md:p-2 flex flex-col gap-1.5">
@@ -180,7 +178,7 @@ const App: React.FC = () => {
                                         Sua tutora de IA. Vamos praticar francês?
                                     </p>
                                 </div>
-                                
+
                                 {isConnected ? (
                                     <button
                                         onClick={disconnect}
@@ -222,7 +220,7 @@ const App: React.FC = () => {
                                         <span className="hidden md:inline text-[10px] font-medium uppercase tracking-wider pr-1">Backup</span>
                                     </button>
                                     <div className="w-px h-4 bg-slate-700 mx-1"></div>
-                                    <button 
+                                    <button
                                         onClick={clearLogs}
                                         className="text-slate-500 hover:text-red-400 transition-colors p-1.5 rounded-full hover:bg-slate-800"
                                         title="Limpar conversa"
@@ -233,7 +231,7 @@ const App: React.FC = () => {
                             )}
                         </div>
                     </div>
-                    
+
                     <div className="flex-1 overflow-y-auto p-3 md:p-4 space-y-3 md:space-y-4 scrollbar-hide scroll-smooth">
                         {logs.length === 0 ? (
                             <div className="h-full flex flex-col items-center justify-center text-slate-600 space-y-2 opacity-60">
@@ -255,14 +253,14 @@ const App: React.FC = () => {
                                         </div>
                                     );
                                 }
-                                
+
                                 const isUser = log.role === 'user';
                                 return (
                                     <div key={index} className={`flex ${isUser ? 'justify-end' : 'justify-start'} animate-in slide-in-from-bottom-2 duration-300`}>
                                         <div className={`
                                             max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 md:px-5 md:py-3 text-sm leading-relaxed shadow-md break-words
-                                            ${isUser 
-                                                ? 'bg-blue-600 text-white rounded-br-none border border-blue-500' 
+                                            ${isUser
+                                                ? 'bg-blue-600 text-white rounded-br-none border border-blue-500'
                                                 : 'bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700'
                                             }
                                         `}>
