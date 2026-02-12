@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { AUDIO_CONFIG, createPcmBlob, decodeBase64, decodeAudioData } from '../utils/audioUtils';
 import { Env } from '../utils/env';
+import { getGeminiKey } from '../utils/supabase';
 import { ConnectionState, LogMessage } from '../types';
 
 const SYSTEM_INSTRUCTION = `
@@ -59,6 +60,10 @@ export const useGeminiLive = () => {
     const streamRef = useRef<MediaStream | null>(null);
     const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
     const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
+    // Dynamic state for transcription while speaking
+    const [streamingInput, setStreamingInput] = useState<string>('');
+    const [streamingOutput, setStreamingOutput] = useState<string>('');
 
     // Accumulators for transcription
     const currentInputRef = useRef<string>('');
@@ -166,14 +171,22 @@ export const useGeminiLive = () => {
     }, [connectionState]);
 
     const connect = async () => {
-        if (!Env.GEMINI_API_KEY) {
-            addLog("API Key missing.", 'system');
-            return;
-        }
-
         try {
             setConnectionState(ConnectionState.CONNECTING);
             addLog("Iniciando sessão...", 'system');
+
+            // 1. Fetch API Key from Supabase or Fallback
+            let apiKey = Env.GEMINI_API_KEY;
+            if (!apiKey) {
+                addLog("Buscando chave de segurança...", 'system');
+                apiKey = (await getGeminiKey()) || '';
+            }
+
+            if (!apiKey) {
+                addLog("Erro: Chave de API não encontrada.", 'system');
+                setConnectionState(ConnectionState.ERROR);
+                return;
+            }
 
             // Initialize Audio Contexts
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
@@ -197,7 +210,7 @@ export const useGeminiLive = () => {
             // Request Wake Lock for mobile
             await requestWakeLock();
 
-            const ai = new GoogleGenAI({ apiKey: Env.GEMINI_API_KEY });
+            const ai = new GoogleGenAI({ apiKey });
 
             // Connect to Live API
             const sessionPromise = ai.live.connect({
@@ -230,7 +243,8 @@ export const useGeminiLive = () => {
                             streamRef.current = stream;
 
                             const source = inputCtx.createMediaStreamSource(stream);
-                            const processor = inputCtx.createScriptProcessor(4096, 1, 1);
+                            // Reduced buffer size for lower latency (4096 -> 2048)
+                            const processor = inputCtx.createScriptProcessor(2048, 1, 1);
                             scriptProcessorRef.current = processor;
 
                             processor.onaudioprocess = (e) => {
@@ -295,11 +309,13 @@ export const useGeminiLive = () => {
                         const inputTx = message.serverContent?.inputTranscription?.text;
                         if (inputTx) {
                             currentInputRef.current += inputTx;
+                            setStreamingInput(currentInputRef.current);
                         }
 
                         const outputTx = message.serverContent?.outputTranscription?.text;
                         if (outputTx) {
                             currentOutputRef.current += outputTx;
+                            setStreamingOutput(currentOutputRef.current);
                         }
 
                         // Handle Turn Complete (Commit text to logs)
@@ -307,10 +323,12 @@ export const useGeminiLive = () => {
                             if (currentInputRef.current.trim()) {
                                 addLog(currentInputRef.current.trim(), 'user');
                                 currentInputRef.current = '';
+                                setStreamingInput('');
                             }
                             if (currentOutputRef.current.trim()) {
                                 addLog(currentOutputRef.current.trim(), 'model');
                                 currentOutputRef.current = '';
+                                setStreamingOutput('');
                             }
                         }
 
@@ -324,6 +342,7 @@ export const useGeminiLive = () => {
                             nextStartTimeRef.current = 0;
                             // Reset transcription buffers on interrupt
                             currentOutputRef.current = '';
+                            setStreamingOutput('');
                         }
                     },
                     onclose: () => {
@@ -381,6 +400,8 @@ export const useGeminiLive = () => {
         // Clear transcription buffers
         currentInputRef.current = '';
         currentOutputRef.current = '';
+        setStreamingInput('');
+        setStreamingOutput('');
     }, []);
 
     useEffect(() => {
@@ -394,6 +415,8 @@ export const useGeminiLive = () => {
         connectionState,
         logs,
         analyser,
-        volume
+        volume,
+        streamingInput,
+        streamingOutput
     };
 };

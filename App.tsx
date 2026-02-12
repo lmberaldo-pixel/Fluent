@@ -36,7 +36,16 @@ const DownloadIcon = () => (
 );
 
 const App: React.FC = () => {
-    const { connect, disconnect, clearLogs, connectionState, analyser, logs } = useGeminiLive();
+    const {
+        connect,
+        disconnect,
+        clearLogs,
+        connectionState,
+        analyser,
+        logs,
+        streamingInput,
+        streamingOutput
+    } = useGeminiLive();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [showToast, setShowToast] = useState(false);
     const [toastMessage, setToastMessage] = useState('');
@@ -48,7 +57,7 @@ const App: React.FC = () => {
 
     useEffect(() => {
         scrollToBottom();
-    }, [logs]);
+    }, [logs, streamingInput, streamingOutput]);
 
     // Show restore notification on mount if logs exist
     useEffect(() => {
@@ -274,6 +283,27 @@ const App: React.FC = () => {
                                     </div>
                                 );
                             })
+                        )}
+
+                        {/* Streaming Input (User speaking) */}
+                        {streamingInput && (
+                            <div className="flex justify-end animate-in fade-in slide-in-from-bottom-1 duration-200">
+                                <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 md:px-5 md:py-3 text-sm leading-relaxed shadow-md break-words bg-blue-600/70 text-white/90 rounded-br-none border border-blue-500/30 italic">
+                                    {streamingInput}...
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Streaming Output (Sophie speaking) */}
+                        {streamingOutput && (
+                            <div className="flex justify-start animate-in fade-in slide-in-from-bottom-1 duration-200">
+                                <div className="max-w-[90%] md:max-w-[80%] rounded-2xl px-4 py-2.5 md:px-5 md:py-3 text-sm leading-relaxed shadow-md break-words bg-slate-800 text-slate-200 rounded-bl-none border border-slate-700">
+                                    <div className="text-[10px] md:text-xs text-blue-300 font-bold mb-1 tracking-wide flex items-center gap-1">
+                                        Sophie (digitando...)
+                                    </div>
+                                    {streamingOutput}
+                                </div>
+                            </div>
                         )}
                         <div ref={messagesEndRef} className="h-1" />
                     </div>
