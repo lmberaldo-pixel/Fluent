@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { AUDIO_CONFIG, createPcmBlob, decodeBase64, decodeAudioData } from '../utils/audioUtils';
+import { Env } from '../utils/env';
 import { ConnectionState, LogMessage } from '../types';
 
 const SYSTEM_INSTRUCTION = `
@@ -26,7 +27,7 @@ const STORAGE_KEY = 'fluent_french_chat_history';
 
 export const useGeminiLive = () => {
     const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
-    
+
     // Initialize logs from localStorage (Restore Point)
     const [logs, setLogs] = useState<LogMessage[]>(() => {
         if (typeof window !== 'undefined') {
@@ -52,7 +53,7 @@ export const useGeminiLive = () => {
 
     const inputAudioContextRef = useRef<AudioContext | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
-    const sessionRef = useRef<any>(null); 
+    const sessionRef = useRef<any>(null);
     const nextStartTimeRef = useRef<number>(0);
     const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
     const streamRef = useRef<MediaStream | null>(null);
@@ -89,11 +90,11 @@ export const useGeminiLive = () => {
     const downsampleBuffer = (buffer: Float32Array, inputRate: number, outputRate: number) => {
         if (inputRate === outputRate) return buffer;
         if (inputRate < outputRate) return buffer;
-        
+
         const ratio = inputRate / outputRate;
         const newLength = Math.ceil(buffer.length / ratio);
         const result = new Float32Array(newLength);
-        
+
         for (let i = 0; i < newLength; i++) {
             const offset = Math.floor(i * ratio);
             // Basic nearest neighbor to avoid complex filtering overhead in JS main thread
@@ -111,7 +112,7 @@ export const useGeminiLive = () => {
                 if (wakeLockRef.current && !wakeLockRef.current.released) {
                     return;
                 }
-                
+
                 const lock = await navigator.wakeLock.request('screen');
                 lock.addEventListener('release', () => {
                     console.log('Wake Lock released');
@@ -140,7 +141,7 @@ export const useGeminiLive = () => {
         const handleVisibilityChange = async () => {
             if (document.visibilityState === 'visible') {
                 console.log('App visible, checking resources...');
-                
+
                 // 1. Re-acquire Wake Lock if we are connected
                 if (connectionState === ConnectionState.CONNECTED) {
                     await requestWakeLock();
@@ -165,7 +166,7 @@ export const useGeminiLive = () => {
     }, [connectionState]);
 
     const connect = async () => {
-        if (!process.env.API_KEY) {
+        if (!Env.GEMINI_API_KEY) {
             addLog("API Key missing.", 'system');
             return;
         }
@@ -178,7 +179,7 @@ export const useGeminiLive = () => {
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             const inputCtx = new AudioContextClass({ sampleRate: AUDIO_CONFIG.inputSampleRate });
             const outputCtx = new AudioContextClass({ sampleRate: AUDIO_CONFIG.outputSampleRate });
-            
+
             // Resume immediately (fix for mobile auto-play policies)
             if (inputCtx.state === 'suspended') await inputCtx.resume();
             if (outputCtx.state === 'suspended') await outputCtx.resume();
@@ -188,23 +189,23 @@ export const useGeminiLive = () => {
 
             // Setup Analyser
             const analyzerNode = outputCtx.createAnalyser();
-            analyzerNode.fftSize = 256; 
+            analyzerNode.fftSize = 256;
             analyzerNode.smoothingTimeConstant = 0.5;
-            analyzerNode.connect(outputCtx.destination); 
+            analyzerNode.connect(outputCtx.destination);
             setAnalyser(analyzerNode);
 
             // Request Wake Lock for mobile
             await requestWakeLock();
 
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            
+            const ai = new GoogleGenAI({ apiKey: Env.GEMINI_API_KEY });
+
             // Connect to Live API
             const sessionPromise = ai.live.connect({
                 model: 'gemini-2.5-flash-native-audio-preview-12-2025',
                 config: {
                     responseModalities: [Modality.AUDIO],
                     speechConfig: {
-                        voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }, 
+                        voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
                     },
                     systemInstruction: SYSTEM_INSTRUCTION,
                     // Enable transcription for both input (user) and output (model)
@@ -215,31 +216,31 @@ export const useGeminiLive = () => {
                     onopen: async () => {
                         addLog("Conectado! Fale agora.", 'system');
                         setConnectionState(ConnectionState.CONNECTED);
-                        
+
                         // Start Microphone Input with mobile-optimized constraints
                         try {
-                            const stream = await navigator.mediaDevices.getUserMedia({ 
+                            const stream = await navigator.mediaDevices.getUserMedia({
                                 audio: {
                                     echoCancellation: true,
                                     noiseSuppression: true,
                                     autoGainControl: true,
                                     sampleRate: AUDIO_CONFIG.inputSampleRate
-                                } 
+                                }
                             });
                             streamRef.current = stream;
-                            
+
                             const source = inputCtx.createMediaStreamSource(stream);
                             const processor = inputCtx.createScriptProcessor(4096, 1, 1);
                             scriptProcessorRef.current = processor;
 
                             processor.onaudioprocess = (e) => {
                                 const inputData = e.inputBuffer.getChannelData(0);
-                                
+
                                 // Calculate volume for visualizer
                                 let sum = 0;
                                 // Optimize loop for volume calc
-                                for(let i=0; i<inputData.length; i+=4) sum += inputData[i] * inputData[i];
-                                setVolume(Math.sqrt(sum / (inputData.length/4)));
+                                for (let i = 0; i < inputData.length; i += 4) sum += inputData[i] * inputData[i];
+                                setVolume(Math.sqrt(sum / (inputData.length / 4)));
 
                                 // Handle sample rate mismatch (Mobile Fallback)
                                 let processData = inputData;
@@ -270,7 +271,7 @@ export const useGeminiLive = () => {
                             if (ctx.state === 'suspended') await ctx.resume();
 
                             nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
-                            
+
                             const audioBuffer = await decodeAudioData(
                                 decodeBase64(base64Audio),
                                 ctx,
@@ -279,8 +280,8 @@ export const useGeminiLive = () => {
 
                             const source = ctx.createBufferSource();
                             source.buffer = audioBuffer;
-                            source.connect(analyzerNode); 
-                            
+                            source.connect(analyzerNode);
+
                             source.addEventListener('ended', () => {
                                 sourcesRef.current.delete(source);
                             });
@@ -317,7 +318,7 @@ export const useGeminiLive = () => {
                         if (message.serverContent?.interrupted) {
                             addLog("Interrupção.", 'system');
                             sourcesRef.current.forEach(src => {
-                                try { src.stop(); } catch(e) {}
+                                try { src.stop(); } catch (e) { }
                             });
                             sourcesRef.current.clear();
                             nextStartTimeRef.current = 0;
