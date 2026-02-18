@@ -11,7 +11,7 @@ REGRAS DE OURO PARA TRADUÇÃO:
 1. Para CADA frase que você falar em Francês, você deve fornecer a tradução em Português IMEDIATAMENTE em seguida.
 2. O formato deve ser sempre: [Frase em Francês] ([Tradução em Português]).
 
-Sophie: "Bonjour! Comment ça va aujourd'hui? (Olá! Como vai você hoje?)"
+Sophie: "Bonjour! Comment ça va hoje? (Olá! Como vai você hoje?)"
 `;
 
 const STORAGE_KEY = 'fluent_french_chat_history';
@@ -19,6 +19,7 @@ const STORAGE_KEY = 'fluent_french_chat_history';
 export const useGeminiLive = () => {
     const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
     const isConnectedRef = useRef(false);
+    const sessionIdRef = useRef<number>(0);
 
     const [logs, setLogs] = useState<LogMessage[]>(() => {
         if (typeof window !== 'undefined') {
@@ -38,17 +39,19 @@ export const useGeminiLive = () => {
         return [];
     });
 
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+    const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
+    const analyserRef = useRef<AnalyserNode | null>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+    const sessionRef = useRef<any>(null);
+    const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+
     const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
     const [volume, setVolume] = useState<number>(0);
 
-    const inputAudioContextRef = useRef<AudioContext | null>(null);
-    const outputAudioContextRef = useRef<AudioContext | null>(null);
-    const sessionRef = useRef<any>(null);
     const nextStartTimeRef = useRef<number>(0);
     const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-    const streamRef = useRef<MediaStream | null>(null);
-    const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
-    const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
     const currentInputRef = useRef<string>('');
     const currentOutputRef = useRef<string>('');
@@ -112,125 +115,192 @@ export const useGeminiLive = () => {
         const handleVisibilityChange = async () => {
             if (document.visibilityState === 'visible') {
                 if (isConnectedRef.current) await requestWakeLock();
-                if (inputAudioContextRef.current?.state === 'suspended') await inputAudioContextRef.current.resume();
-                if (outputAudioContextRef.current?.state === 'suspended') await outputAudioContextRef.current.resume();
+                if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
             }
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
         return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
     }, []);
 
+    const disconnect = useCallback((reason: any = "unknown") => {
+        const reasonStr = typeof reason === 'string' ? reason : (reason?.type || "object");
+        console.log(`[useGeminiLive] DISCONNECTING... Reason: ${reasonStr}`);
+        isConnectedRef.current = false;
+        sessionIdRef.current = 0; // Invalidate current session
+
+        if (sessionRef.current) { try { sessionRef.current.close(); } catch (e) { } sessionRef.current = null; }
+        if (streamRef.current) { try { streamRef.current.getTracks().forEach(track => track.stop()); } catch (e) { } streamRef.current = null; }
+
+        if (audioSourceRef.current) { try { audioSourceRef.current.disconnect(); } catch (e) { } audioSourceRef.current = null; }
+        if (processorNodeRef.current) { try { processorNodeRef.current.disconnect(); } catch (e) { } processorNodeRef.current = null; }
+        if (analyserRef.current) { try { analyserRef.current.disconnect(); } catch (e) { } analyserRef.current = null; }
+        if (audioContextRef.current) { try { audioContextRef.current.close(); } catch (e) { } audioContextRef.current = null; }
+
+        releaseWakeLock();
+        setConnectionState(ConnectionState.DISCONNECTED);
+        setAnalyser(null);
+        setVolume(0);
+    }, []);
+
     const connect = async () => {
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.API_KEY;
-        console.log("[useGeminiLive] Connect triggered. API_KEY present:", !!apiKey);
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 
         if (!apiKey) {
-            console.error("[useGeminiLive] MISSING API KEY. Tried import.meta.env.VITE_GEMINI_API_KEY and process.env.API_KEY");
             addLog("Chave da API não configurada.", 'system');
             return;
         }
 
-        if (connectionState === ConnectionState.CONNECTING || isConnectedRef.current) return;
+        // Strict Atomic Guard: Don't allow multiple connection attempts
+        if (connectionState !== ConnectionState.DISCONNECTED || isConnectedRef.current) {
+            console.warn("[useGeminiLive] Already connecting or connected. Ignoring request.");
+            return;
+        }
+
+        const currentSessionId = Date.now();
+        sessionIdRef.current = currentSessionId;
 
         try {
             setConnectionState(ConnectionState.CONNECTING);
-            addLog("Iniciando sessão...", 'system');
+            addLog("Conectando...", 'system');
+            console.log("[useGeminiLive] Using API Key:", apiKey.substring(0, 5) + "...");
+            console.log("[useGeminiLive] Connecting with model: gemini-2.5-flash-native-audio-preview-12-2025");
 
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-            const inputCtx = new AudioContextClass({ sampleRate: AUDIO_CONFIG.inputSampleRate });
-            const outputCtx = new AudioContextClass({ sampleRate: AUDIO_CONFIG.outputSampleRate });
+            const ctx = new AudioContextClass();
+            audioContextRef.current = ctx;
 
-            if (inputCtx.state === 'suspended') await inputCtx.resume();
-            if (outputCtx.state === 'suspended') await outputCtx.resume();
+            if (ctx.state === 'suspended') await ctx.resume();
+            console.log("[useGeminiLive] AudioContext active at:", ctx.sampleRate, "Hz");
 
-            inputAudioContextRef.current = inputCtx;
-            outputAudioContextRef.current = outputCtx;
+            const analyserNode = ctx.createAnalyser();
+            analyserNode.fftSize = 256;
+            // Removed: analyserNode.connect(ctx.destination); // Stopping mic echo
+            analyserRef.current = analyserNode;
+            setAnalyser(analyserNode);
 
-            const analyzerNode = outputCtx.createAnalyser();
-            analyzerNode.fftSize = 256;
-            analyzerNode.connect(outputCtx.destination);
-            setAnalyser(analyzerNode);
-
+            console.log("[useGeminiLive] Instantiating GoogleGenAI with key length:", apiKey?.length);
             const ai = new GoogleGenAI({ apiKey });
 
-            console.log("[useGeminiLive] Reverting to last known working state (exp model)...");
-
             const session = await ai.live.connect({
-                model: 'gemini-2.0-flash-exp',
+                model: 'models/gemini-2.5-flash-native-audio-preview-12-2025',
                 config: {
                     responseModalities: [Modality.AUDIO],
                     speechConfig: {
-                        voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
+                        voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Aoede' } } // 'Aoede' is a clear female voice
                     },
+                    inputAudioTranscription: {},
+                    outputAudioTranscription: {},
                     systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] }
                 },
                 callbacks: {
                     onopen: async () => {
-                        console.log("[useGeminiLive] SESSION READY. Waiting handshake delay...");
+                        console.log("[useGeminiLive] Session established. ID:", currentSessionId);
 
-                        // Small delay to ensure session is fully ready before we start streaming mic data
-                        await new Promise(resolve => setTimeout(resolve, 500));
+                        // Handshake delay with ID check
+                        await new Promise(resolve => setTimeout(resolve, 600));
+
+                        if (sessionIdRef.current !== currentSessionId) {
+                            console.warn("[useGeminiLive] Aborting stale session (onopen check). ID:", currentSessionId);
+                            // Do NOT call disconnect here, as it would kill the NEW session
+                            return;
+                        }
 
                         addLog("Conectado!", 'system');
                         setConnectionState(ConnectionState.CONNECTED);
                         isConnectedRef.current = true;
+
                         await requestWakeLock();
 
                         try {
                             const stream = await navigator.mediaDevices.getUserMedia({
-                                audio: { echoCancellation: true, noiseSuppression: true, sampleRate: AUDIO_CONFIG.inputSampleRate }
+                                audio: { echoCancellation: true, noiseSuppression: true }
                             });
-                            streamRef.current = stream;
 
-                            const source = inputCtx.createMediaStreamSource(stream);
-                            const processor = inputCtx.createScriptProcessor(4096, 1, 1);
-                            scriptProcessorRef.current = processor;
+                            // Re-check ID after getUserMedia prompt (User might delay)
+                            if (sessionIdRef.current !== currentSessionId) {
+                                stream.getTracks().forEach(t => t.stop());
+                                return;
+                            }
+
+                            streamRef.current = stream;
+                            const source = ctx.createMediaStreamSource(stream);
+                            audioSourceRef.current = source;
+                            source.connect(analyserNode);
+
+                            const processor = ctx.createScriptProcessor(4096, 1, 1);
+                            processorNodeRef.current = processor;
+
+                            let logCounter = 0;
 
                             processor.onaudioprocess = (e) => {
-                                if (!isConnectedRef.current) return;
+                                if (!isConnectedRef.current || sessionIdRef.current !== currentSessionId) return;
                                 const inputData = e.inputBuffer.getChannelData(0);
+
                                 let sum = 0;
-                                for (let i = 0; i < inputData.length; i += 4) sum += inputData[i] * inputData[i];
-                                setVolume(Math.sqrt(sum / (inputData.length / 4)));
+                                for (let i = 0; i < inputData.length; i += 8) sum += inputData[i] * inputData[i];
+                                const rms = Math.sqrt(sum / (inputData.length / 8));
+                                setVolume(rms);
+
+                                if (logCounter++ % 100 === 0) console.log("[useGeminiLive] RMS:", rms.toFixed(4));
 
                                 let processData = inputData;
-                                if (inputCtx.sampleRate !== AUDIO_CONFIG.inputSampleRate) {
-                                    processData = downsampleBuffer(inputData, inputCtx.sampleRate, AUDIO_CONFIG.inputSampleRate);
+                                if (ctx.sampleRate !== AUDIO_CONFIG.inputSampleRate) {
+                                    processData = downsampleBuffer(inputData, ctx.sampleRate, AUDIO_CONFIG.inputSampleRate);
                                 }
 
                                 try {
                                     session.sendRealtimeInput({ media: createPcmBlob(processData) });
                                 } catch (err) {
-                                    console.warn("[useGeminiLive] Handshake probably not finished", err);
+                                    console.warn("[useGeminiLive] Send failed", err);
                                 }
                             };
 
                             source.connect(processor);
-                            processor.connect(inputCtx.destination);
+
+                            // CRITICAL: ScriptProcessorNode MUST be connected to destination to fire onaudioprocess.
+                            // We use a GainNode with 0 gain to keep it silent and avoid echo.
+                            const silentGain = ctx.createGain();
+                            silentGain.gain.value = 0;
+                            processor.connect(silentGain);
+                            silentGain.connect(ctx.destination);
                         } catch (err) {
-                            console.error("[useGeminiLive] Mic Error:", err);
-                            addLog("Erro de microfone.", 'system');
-                            disconnect();
+                            console.error("[useGeminiLive] Mic failed:", err);
+                            addLog("Microfone não disponível.", 'system');
+                            if (sessionIdRef.current === currentSessionId) disconnect();
                         }
                     },
                     onmessage: async (message: LiveServerMessage) => {
+                        if (sessionIdRef.current !== currentSessionId) return;
+                        console.log("[useGeminiLive] Message received:", message);
+
                         const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-                        if (base64Audio && outputAudioContextRef.current) {
-                            const ctx = outputAudioContextRef.current;
+                        if (base64Audio) console.log("[useGeminiLive] Audio data received, length:", base64Audio.length);
+                        if (base64Audio && audioContextRef.current) {
+                            const ctx = audioContextRef.current;
                             if (ctx.state === 'suspended') await ctx.resume();
+
                             nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
                             const audioBuffer = await decodeAudioData(decodeBase64(base64Audio), ctx, AUDIO_CONFIG.outputSampleRate);
+
                             const source = ctx.createBufferSource();
                             source.buffer = audioBuffer;
-                            source.connect(analyzerNode);
+                            source.connect(analyserRef.current!);
+                            source.connect(ctx.destination); // Sophie goes to speakers
+
                             source.addEventListener('ended', () => sourcesRef.current.delete(source));
                             source.start(nextStartTimeRef.current);
                             nextStartTimeRef.current += audioBuffer.duration;
                             sourcesRef.current.add(source);
                         }
 
-                        if (message.serverContent?.inputTranscription?.text) currentInputRef.current += message.serverContent.inputTranscription.text;
-                        if (message.serverContent?.outputTranscription?.text) currentOutputRef.current += message.serverContent.outputTranscription.text;
+                        if (message.serverContent?.inputTranscription?.text) {
+                            console.log("[useGeminiLive] User Transcript:", message.serverContent.inputTranscription.text);
+                            currentInputRef.current += message.serverContent.inputTranscription.text;
+                        }
+                        if (message.serverContent?.outputTranscription?.text) {
+                            console.log("[useGeminiLive] Sophie Transcript:", message.serverContent.outputTranscription.text);
+                            currentOutputRef.current += message.serverContent.outputTranscription.text;
+                        }
 
                         if (message.serverContent?.turnComplete) {
                             if (currentInputRef.current.trim()) { addLog(currentInputRef.current.trim(), 'user'); currentInputRef.current = ''; }
@@ -245,21 +315,22 @@ export const useGeminiLive = () => {
                         }
                     },
                     onclose: (event) => {
-                        console.log("[useGeminiLive] SESSION CLOSED:", event);
-                        if (isConnectedRef.current) {
-                            const msg = `Sessão encerrada pelo servidor.\nCódigo: ${event?.code || 'N/A'}\nMotivo: ${event?.reason || 'Sem motivo informado'}`;
-                            alert(msg);
+                        console.log("[useGeminiLive] CLOSED. ID:", currentSessionId, event);
+                        if (sessionIdRef.current === currentSessionId) {
+                            if (isConnectedRef.current && event?.code !== 1000) {
+                                const reason = event?.reason || "Desconhecido";
+                                console.error("[useGeminiLive] Server closed connection:", event);
+                                alert(`CONEXÃO ENCERRADA PELO SERVIDOR\nCódigo: ${event?.code || 'N/A'}\nMotivo: ${reason}`);
+                            }
+                            disconnect();
                         }
-                        addLog("Conexão interrompida.", 'system');
-                        setConnectionState(ConnectionState.DISCONNECTED);
-                        isConnectedRef.current = false;
-                        releaseWakeLock();
                     },
                     onerror: (e) => {
-                        console.error("[useGeminiLive] SESSION ERROR:", e);
-                        setConnectionState(ConnectionState.ERROR);
-                        isConnectedRef.current = false;
-                        releaseWakeLock();
+                        console.error("[useGeminiLive] ERROR. ID:", currentSessionId, e);
+                        if (sessionIdRef.current === currentSessionId) {
+                            setConnectionState(ConnectionState.ERROR);
+                            disconnect();
+                        }
                     }
                 }
             });
@@ -267,27 +338,16 @@ export const useGeminiLive = () => {
             sessionRef.current = session;
 
         } catch (error) {
-            console.error("[useGeminiLive] CONNECTION FAILED:", error);
-            setConnectionState(ConnectionState.ERROR);
-            addLog("Erro ao conectar.", 'system');
-            releaseWakeLock();
+            console.error("[useGeminiLive] FAILED. ID:", currentSessionId, error);
+            if (sessionIdRef.current === currentSessionId) {
+                setConnectionState(ConnectionState.ERROR);
+                addLog("Falha na conexão.", 'system');
+                disconnect();
+            }
         }
     };
 
-    const disconnect = useCallback(() => {
-        console.log("[useGeminiLive] MANUAL DISCONNECT");
-        isConnectedRef.current = false;
-        if (sessionRef.current) { try { sessionRef.current.close(); } catch (e) { } sessionRef.current = null; }
-        if (streamRef.current) { streamRef.current.getTracks().forEach(track => track.stop()); streamRef.current = null; }
-        if (scriptProcessorRef.current) { scriptProcessorRef.current.disconnect(); scriptProcessorRef.current = null; }
-        if (inputAudioContextRef.current) { inputAudioContextRef.current.close(); inputAudioContextRef.current = null; }
-        if (outputAudioContextRef.current) { outputAudioContextRef.current.close(); outputAudioContextRef.current = null; }
-        releaseWakeLock();
-        setConnectionState(ConnectionState.DISCONNECTED);
-        setAnalyser(null);
-    }, []);
-
-    useEffect(() => { return () => disconnect(); }, [disconnect]);
+    useEffect(() => { return () => disconnect("unmount"); }, [disconnect]);
 
     return { connect, disconnect, clearLogs, connectionState, logs, analyser, volume };
 };
