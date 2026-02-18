@@ -121,8 +121,11 @@ export const useGeminiLive = () => {
     }, []);
 
     const connect = async () => {
-        console.log("[useGeminiLive] Connect triggered. API_KEY present:", !!process.env.API_KEY);
-        if (!process.env.API_KEY) {
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.API_KEY;
+        console.log("[useGeminiLive] Connect triggered. API_KEY present:", !!apiKey);
+
+        if (!apiKey) {
+            console.error("[useGeminiLive] MISSING API KEY. Tried import.meta.env.VITE_GEMINI_API_KEY and process.env.API_KEY");
             addLog("Chave da API não configurada.", 'system');
             return;
         }
@@ -148,7 +151,7 @@ export const useGeminiLive = () => {
             analyzerNode.connect(outputCtx.destination);
             setAnalyser(analyzerNode);
 
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const ai = new GoogleGenAI({ apiKey });
 
             console.log("[useGeminiLive] Reverting to last known working state (exp model)...");
 
