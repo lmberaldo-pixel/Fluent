@@ -11,30 +11,21 @@ REGRAS DE OURO PARA TRADUÇÃO:
 1. Para CADA frase que você falar em Francês, você deve fornecer a tradução em Português IMEDIATAMENTE em seguida.
 2. O formato deve ser sempre: [Frase em Francês] ([Tradução em Português]).
 
-Exemplos de interação:
 Sophie: "Bonjour! Comment ça va aujourd'hui? (Olá! Como vai você hoje?)"
-Usuário: "Ça va bien."
-Sophie: "C'est très bien! Qu'as-tu fait de beau? (Isso é muito bom! O que você fez de bom?)"
-
-Outras Regras:
-- Se o usuário errar, explique gentilmente em Português.
-- Mantenha a voz calma e encorajadora.
-- Fale o Francês de forma clara para ajudar na compreensão.
 `;
 
 const STORAGE_KEY = 'fluent_french_chat_history';
 
 export const useGeminiLive = () => {
     const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.DISCONNECTED);
+    const isConnectedRef = useRef(false);
 
-    // Initialize logs from localStorage (Restore Point)
     const [logs, setLogs] = useState<LogMessage[]>(() => {
         if (typeof window !== 'undefined') {
             try {
                 const saved = localStorage.getItem(STORAGE_KEY);
                 if (saved) {
                     const parsed = JSON.parse(saved);
-                    // Hydrate Date objects from strings
                     return parsed.map((item: any) => ({
                         ...item,
                         timestamp: new Date(item.timestamp)
@@ -59,22 +50,19 @@ export const useGeminiLive = () => {
     const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
     const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
-    // Accumulators for transcription
     const currentInputRef = useRef<string>('');
     const currentOutputRef = useRef<string>('');
 
-    // Persist logs to localStorage whenever they change
     useEffect(() => {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(logs));
         } catch (e) {
-            console.error('Failed to save logs persistence', e);
+            console.error('Failed to save logs', e);
         }
     }, [logs]);
 
     const addLog = (text: string, role: 'user' | 'model' | 'system') => {
         setLogs(prev => {
-            // Keep last 50 messages to prevent storage bloat
             const newLogs = [...prev, { role, text, timestamp: new Date() }].slice(-50);
             return newLogs;
         });
@@ -85,21 +73,14 @@ export const useGeminiLive = () => {
         localStorage.removeItem(STORAGE_KEY);
     }, []);
 
-    // Simple downsampler for 48k/44.1k -> 16k if needed
     const downsampleBuffer = (buffer: Float32Array, inputRate: number, outputRate: number) => {
         if (inputRate === outputRate) return buffer;
-        if (inputRate < outputRate) return buffer;
-
         const ratio = inputRate / outputRate;
         const newLength = Math.ceil(buffer.length / ratio);
         const result = new Float32Array(newLength);
-
         for (let i = 0; i < newLength; i++) {
             const offset = Math.floor(i * ratio);
-            // Basic nearest neighbor to avoid complex filtering overhead in JS main thread
-            if (offset < buffer.length) {
-                result[i] = buffer[offset];
-            }
+            if (offset < buffer.length) result[i] = buffer[offset];
         }
         return result;
     };
@@ -107,20 +88,12 @@ export const useGeminiLive = () => {
     const requestWakeLock = async () => {
         try {
             if ('wakeLock' in navigator) {
-                // If already locked and not released, do nothing
-                if (wakeLockRef.current && !wakeLockRef.current.released) {
-                    return;
-                }
-
+                if (wakeLockRef.current && !wakeLockRef.current.released) return;
                 const lock = await navigator.wakeLock.request('screen');
-                lock.addEventListener('release', () => {
-                    console.log('Wake Lock released');
-                });
                 wakeLockRef.current = lock;
-                console.log('Wake Lock acquired');
             }
         } catch (err) {
-            console.warn('Wake Lock denied or failed', err);
+            console.warn('Wake Lock failed', err);
         }
     };
 
@@ -135,106 +108,74 @@ export const useGeminiLive = () => {
         }
     };
 
-    // Re-acquire WakeLock and Resume Audio on Visibility Change (Mobile App Switch)
     useEffect(() => {
         const handleVisibilityChange = async () => {
             if (document.visibilityState === 'visible') {
-                console.log('App visible, checking resources...');
-
-                // 1. Re-acquire Wake Lock if we are connected
-                if (connectionState === ConnectionState.CONNECTED) {
-                    await requestWakeLock();
-                }
-
-                // 2. Resume Audio Contexts (Mobile browsers suspend them in background)
-                if (inputAudioContextRef.current?.state === 'suspended') {
-                    console.log('Resuming input context');
-                    await inputAudioContextRef.current.resume();
-                }
-                if (outputAudioContextRef.current?.state === 'suspended') {
-                    console.log('Resuming output context');
-                    await outputAudioContextRef.current.resume();
-                }
+                if (isConnectedRef.current) await requestWakeLock();
+                if (inputAudioContextRef.current?.state === 'suspended') await inputAudioContextRef.current.resume();
+                if (outputAudioContextRef.current?.state === 'suspended') await outputAudioContextRef.current.resume();
             }
         };
-
         document.addEventListener('visibilitychange', handleVisibilityChange);
-        return () => {
-            document.removeEventListener('visibilitychange', handleVisibilityChange);
-        };
-    }, [connectionState]);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, []);
 
     const connect = async () => {
-        console.log("Connect triggered. API_KEY state:", !!process.env.API_KEY);
+        console.log("[useGeminiLive] Connect triggered. API_KEY present:", !!process.env.API_KEY);
         if (!process.env.API_KEY) {
-            addLog("API Key missing local. Configure o arquivo .env.local", 'system');
+            addLog("Chave da API não configurada.", 'system');
             return;
         }
+
+        if (connectionState === ConnectionState.CONNECTING || isConnectedRef.current) return;
 
         try {
             setConnectionState(ConnectionState.CONNECTING);
             addLog("Iniciando sessão...", 'system');
 
-            // Initialize Audio Contexts
             const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
             const inputCtx = new AudioContextClass({ sampleRate: AUDIO_CONFIG.inputSampleRate });
             const outputCtx = new AudioContextClass({ sampleRate: AUDIO_CONFIG.outputSampleRate });
 
-            // Resume immediately (fix for mobile auto-play policies)
             if (inputCtx.state === 'suspended') await inputCtx.resume();
             if (outputCtx.state === 'suspended') await outputCtx.resume();
 
             inputAudioContextRef.current = inputCtx;
             outputAudioContextRef.current = outputCtx;
 
-            // Setup Analyser
             const analyzerNode = outputCtx.createAnalyser();
             analyzerNode.fftSize = 256;
-            analyzerNode.smoothingTimeConstant = 0.5;
             analyzerNode.connect(outputCtx.destination);
             setAnalyser(analyzerNode);
 
-            // Request Wake Lock for mobile
-            console.log("Wake Lock acquired");
-
-            if (!process.env.API_KEY) {
-                console.error("CRITICAL: API_KEY is empty in production build.");
-                alert("Erro: Chave da API não encontrada no build de produção. Verifique os secrets do GitHub.");
-                addLog("Erro: Chave da API ausente.", 'system');
-                setConnectionState(ConnectionState.ERROR);
-                return;
-            }
-
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-            console.log("Connecting to Gemini Live with model: gemini-2.0-flash-exp");
-            // Connect to Live API
-            const sessionPromise = ai.live.connect({
+            console.log("[useGeminiLive] Reverting to last known working state (exp model)...");
+
+            const session = await ai.live.connect({
                 model: 'gemini-2.0-flash-exp',
                 config: {
                     responseModalities: [Modality.AUDIO],
                     speechConfig: {
-                        voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+                        voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
                     },
-                    systemInstruction: SYSTEM_INSTRUCTION,
-                    // Enable transcription for both input (user) and output (model)
-                    inputAudioTranscription: {},
-                    outputAudioTranscription: {},
+                    systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] }
                 },
                 callbacks: {
                     onopen: async () => {
-                        addLog("Conectado! Fale agora.", 'system');
-                        setConnectionState(ConnectionState.CONNECTED);
+                        console.log("[useGeminiLive] SESSION READY. Waiting handshake delay...");
 
-                        // Start Microphone Input with mobile-optimized constraints
+                        // Small delay to ensure session is fully ready before we start streaming mic data
+                        await new Promise(resolve => setTimeout(resolve, 500));
+
+                        addLog("Conectado!", 'system');
+                        setConnectionState(ConnectionState.CONNECTED);
+                        isConnectedRef.current = true;
+                        await requestWakeLock();
+
                         try {
                             const stream = await navigator.mediaDevices.getUserMedia({
-                                audio: {
-                                    echoCancellation: true,
-                                    noiseSuppression: true,
-                                    autoGainControl: true,
-                                    sampleRate: AUDIO_CONFIG.inputSampleRate
-                                }
+                                audio: { echoCancellation: true, noiseSuppression: true, sampleRate: AUDIO_CONFIG.inputSampleRate }
                             });
                             streamRef.current = stream;
 
@@ -243,168 +184,107 @@ export const useGeminiLive = () => {
                             scriptProcessorRef.current = processor;
 
                             processor.onaudioprocess = (e) => {
+                                if (!isConnectedRef.current) return;
                                 const inputData = e.inputBuffer.getChannelData(0);
-
-                                // Calculate volume for visualizer
                                 let sum = 0;
-                                // Optimize loop for volume calc
                                 for (let i = 0; i < inputData.length; i += 4) sum += inputData[i] * inputData[i];
                                 setVolume(Math.sqrt(sum / (inputData.length / 4)));
 
-                                // Handle sample rate mismatch (Mobile Fallback)
                                 let processData = inputData;
                                 if (inputCtx.sampleRate !== AUDIO_CONFIG.inputSampleRate) {
                                     processData = downsampleBuffer(inputData, inputCtx.sampleRate, AUDIO_CONFIG.inputSampleRate);
                                 }
 
-                                const pcmBlob = createPcmBlob(processData);
-                                sessionPromise.then(session => {
-                                    session.sendRealtimeInput({ media: pcmBlob });
-                                });
+                                try {
+                                    session.sendRealtimeInput({ media: createPcmBlob(processData) });
+                                } catch (err) {
+                                    console.warn("[useGeminiLive] Handshake probably not finished", err);
+                                }
                             };
 
                             source.connect(processor);
                             processor.connect(inputCtx.destination);
                         } catch (err) {
-                            console.error("Mic error", err);
-                            addLog("Erro ao acessar microfone. Verifique permissões.", 'system');
+                            console.error("[useGeminiLive] Mic Error:", err);
+                            addLog("Erro de microfone.", 'system');
                             disconnect();
                         }
                     },
                     onmessage: async (message: LiveServerMessage) => {
-                        // Handle Audio Output
                         const base64Audio = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
                         if (base64Audio && outputAudioContextRef.current) {
                             const ctx = outputAudioContextRef.current;
-                            // Ensure context is running on receiving message (mobile safeguard)
                             if (ctx.state === 'suspended') await ctx.resume();
-
                             nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
-
-                            const audioBuffer = await decodeAudioData(
-                                decodeBase64(base64Audio),
-                                ctx,
-                                AUDIO_CONFIG.outputSampleRate
-                            );
-
+                            const audioBuffer = await decodeAudioData(decodeBase64(base64Audio), ctx, AUDIO_CONFIG.outputSampleRate);
                             const source = ctx.createBufferSource();
                             source.buffer = audioBuffer;
                             source.connect(analyzerNode);
-
-                            source.addEventListener('ended', () => {
-                                sourcesRef.current.delete(source);
-                            });
-
+                            source.addEventListener('ended', () => sourcesRef.current.delete(source));
                             source.start(nextStartTimeRef.current);
                             nextStartTimeRef.current += audioBuffer.duration;
                             sourcesRef.current.add(source);
                         }
 
-                        // Handle Transcriptions
-                        const inputTx = message.serverContent?.inputTranscription?.text;
-                        if (inputTx) {
-                            currentInputRef.current += inputTx;
-                        }
+                        if (message.serverContent?.inputTranscription?.text) currentInputRef.current += message.serverContent.inputTranscription.text;
+                        if (message.serverContent?.outputTranscription?.text) currentOutputRef.current += message.serverContent.outputTranscription.text;
 
-                        const outputTx = message.serverContent?.outputTranscription?.text;
-                        if (outputTx) {
-                            currentOutputRef.current += outputTx;
-                        }
-
-                        // Handle Turn Complete (Commit text to logs)
                         if (message.serverContent?.turnComplete) {
-                            if (currentInputRef.current.trim()) {
-                                addLog(currentInputRef.current.trim(), 'user');
-                                currentInputRef.current = '';
-                            }
-                            if (currentOutputRef.current.trim()) {
-                                addLog(currentOutputRef.current.trim(), 'model');
-                                currentOutputRef.current = '';
-                            }
+                            if (currentInputRef.current.trim()) { addLog(currentInputRef.current.trim(), 'user'); currentInputRef.current = ''; }
+                            if (currentOutputRef.current.trim()) { addLog(currentOutputRef.current.trim(), 'model'); currentOutputRef.current = ''; }
                         }
 
-                        // Handle Interruption
                         if (message.serverContent?.interrupted) {
-                            addLog("Interrupção.", 'system');
-                            sourcesRef.current.forEach(src => {
-                                try { src.stop(); } catch (e) { }
-                            });
+                            sourcesRef.current.forEach(src => { try { src.stop(); } catch (e) { } });
                             sourcesRef.current.clear();
                             nextStartTimeRef.current = 0;
-                            // Reset transcription buffers on interrupt
                             currentOutputRef.current = '';
                         }
                     },
-                    onclose: () => {
-                        console.log("Connection closed.");
-                        addLog("Conexão fechada.", 'system');
+                    onclose: (event) => {
+                        console.log("[useGeminiLive] SESSION CLOSED:", event);
+                        if (isConnectedRef.current) {
+                            const msg = `Sessão encerrada pelo servidor.\nCódigo: ${event?.code || 'N/A'}\nMotivo: ${event?.reason || 'Sem motivo informado'}`;
+                            alert(msg);
+                        }
+                        addLog("Conexão interrompida.", 'system');
                         setConnectionState(ConnectionState.DISCONNECTED);
+                        isConnectedRef.current = false;
                         releaseWakeLock();
                     },
                     onerror: (e) => {
-                        console.error("Session error", e);
-                        alert("Erro na conexão com Gemini: " + (e instanceof Error ? e.message : JSON.stringify(e)));
-                        addLog("Erro na sessão.", 'system');
+                        console.error("[useGeminiLive] SESSION ERROR:", e);
                         setConnectionState(ConnectionState.ERROR);
+                        isConnectedRef.current = false;
                         releaseWakeLock();
                     }
                 }
             });
 
-            sessionRef.current = sessionPromise;
+            sessionRef.current = session;
 
         } catch (error) {
-            console.error(error);
+            console.error("[useGeminiLive] CONNECTION FAILED:", error);
             setConnectionState(ConnectionState.ERROR);
-            addLog("Falha ao iniciar. Tente recarregar.", 'system');
+            addLog("Erro ao conectar.", 'system');
             releaseWakeLock();
         }
     };
 
     const disconnect = useCallback(() => {
-        if (sessionRef.current) {
-            sessionRef.current.then((s: any) => s.close());
-            sessionRef.current = null;
-        }
-
-        if (streamRef.current) {
-            streamRef.current.getTracks().forEach(track => track.stop());
-            streamRef.current = null;
-        }
-        if (scriptProcessorRef.current) {
-            scriptProcessorRef.current.disconnect();
-            scriptProcessorRef.current = null;
-        }
-
-        if (inputAudioContextRef.current) {
-            inputAudioContextRef.current.close();
-            inputAudioContextRef.current = null;
-        }
-        if (outputAudioContextRef.current) {
-            outputAudioContextRef.current.close();
-            outputAudioContextRef.current = null;
-        }
-
+        console.log("[useGeminiLive] MANUAL DISCONNECT");
+        isConnectedRef.current = false;
+        if (sessionRef.current) { try { sessionRef.current.close(); } catch (e) { } sessionRef.current = null; }
+        if (streamRef.current) { streamRef.current.getTracks().forEach(track => track.stop()); streamRef.current = null; }
+        if (scriptProcessorRef.current) { scriptProcessorRef.current.disconnect(); scriptProcessorRef.current = null; }
+        if (inputAudioContextRef.current) { inputAudioContextRef.current.close(); inputAudioContextRef.current = null; }
+        if (outputAudioContextRef.current) { outputAudioContextRef.current.close(); outputAudioContextRef.current = null; }
         releaseWakeLock();
-
         setConnectionState(ConnectionState.DISCONNECTED);
         setAnalyser(null);
-        // Clear transcription buffers
-        currentInputRef.current = '';
-        currentOutputRef.current = '';
     }, []);
 
-    useEffect(() => {
-        return () => disconnect();
-    }, [disconnect]);
+    useEffect(() => { return () => disconnect(); }, [disconnect]);
 
-    return {
-        connect,
-        disconnect,
-        clearLogs,
-        connectionState,
-        logs,
-        analyser,
-        volume
-    };
+    return { connect, disconnect, clearLogs, connectionState, logs, analyser, volume };
 };
