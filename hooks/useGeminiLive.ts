@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { AUDIO_CONFIG, createPcmBlob, decodeBase64, decodeAudioData } from '../utils/audioUtils';
 import { ConnectionState, LogMessage } from '../types';
+import { supabase } from '../utils/supabaseClient';
 
 const SYSTEM_INSTRUCTION = `
 Você é 'Sophie', uma tutora de francês charmosa, paciente e altamente qualificada. 
@@ -143,10 +144,35 @@ export const useGeminiLive = () => {
     }, []);
 
     const connect = async () => {
-        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+        // Strict Atomic Guard: Don't allow multiple connection attempts
+        if (connectionState !== ConnectionState.DISCONNECTED || isConnectedRef.current) {
+            console.warn("[useGeminiLive] Already connecting or connected. Ignoring request.");
+            return;
+        }
+
+        setConnectionState(ConnectionState.CONNECTING);
+        addLog("Obtendo permissão de acesso...", 'system');
+
+        let apiKey = '';
+        try {
+            const { data, error } = await supabase
+                .from('secrets')
+                .select('value')
+                .eq('name', 'GEMINI_API_KEY')
+                .single();
+
+            if (error || !data) throw error || new Error("Chave não encontrada no banco");
+            apiKey = data.value;
+        } catch (err) {
+            console.error("Erro ao buscar a chave no Supabase:", err);
+            addLog("Erro ao autenticar a IA. A chave secreta não está no sistema.", 'system');
+            setConnectionState(ConnectionState.DISCONNECTED);
+            return;
+        }
 
         if (!apiKey) {
-            addLog("Chave da API não configurada.", 'system');
+            addLog("Chave da API não configurada corretamente no sistema.", 'system');
+            setConnectionState(ConnectionState.DISCONNECTED);
             return;
         }
 
@@ -160,7 +186,6 @@ export const useGeminiLive = () => {
         sessionIdRef.current = currentSessionId;
 
         try {
-            setConnectionState(ConnectionState.CONNECTING);
             addLog("Conectando...", 'system');
             console.log("[useGeminiLive] Using API Key:", apiKey.substring(0, 5) + "...");
             console.log("[useGeminiLive] Connecting with model: gemini-2.5-flash-native-audio-preview-12-2025");
