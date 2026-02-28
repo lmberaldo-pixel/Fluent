@@ -155,6 +155,8 @@ export const useGeminiLive = () => {
 
         let apiKey = '';
         try {
+            if (!supabase) throw new Error("Supabase não configurado. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no GitHub.");
+
             const { data, error } = await supabase
                 .from('secrets')
                 .select('value')
@@ -163,9 +165,9 @@ export const useGeminiLive = () => {
 
             if (error || !data) throw error || new Error("Chave não encontrada no banco");
             apiKey = data.value;
-        } catch (err) {
+        } catch (err: any) {
             console.error("Erro ao buscar a chave no Supabase:", err);
-            addLog("Erro ao autenticar a IA. A chave secreta não está no sistema.", 'system');
+            addLog(`Erro: ${err.message || 'Falha ao autenticar a IA.'}`, 'system');
             setConnectionState(ConnectionState.DISCONNECTED);
             return;
         }
