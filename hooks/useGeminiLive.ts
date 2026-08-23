@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { AUDIO_CONFIG, createPcmBlob, decodeBase64, decodeAudioData } from '../utils/audioUtils';
+import { ConnectionState, LogMessage } from '../types';
 import { db } from '../utils/firebaseClient';
 import { doc, getDoc } from 'firebase/firestore';
 
