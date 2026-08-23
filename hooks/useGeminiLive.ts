@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { AUDIO_CONFIG, createPcmBlob, decodeBase64, decodeAudioData } from '../utils/audioUtils';
-import { ConnectionState, LogMessage } from '../types';
-import { supabase } from '../utils/supabaseClient';
+import { db } from '../utils/firebaseClient';
+import { doc, getDoc } from 'firebase/firestore';
 
 const SYSTEM_INSTRUCTION = `
 Você é 'Sophie', uma tutora de francês charmosa, paciente e altamente qualificada. 
@@ -112,17 +112,6 @@ export const useGeminiLive = () => {
         }
     };
 
-    useEffect(() => {
-        const handleVisibilityChange = async () => {
-            if (document.visibilityState === 'visible') {
-                if (isConnectedRef.current) await requestWakeLock();
-                if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
-            }
-        };
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-    }, []);
-
     const disconnect = useCallback((reason: any = "unknown") => {
         const reasonStr = typeof reason === 'string' ? reason : (reason?.type || "object");
         console.log(`[useGeminiLive] DISCONNECTING... Reason: ${reasonStr}`);
@@ -143,6 +132,27 @@ export const useGeminiLive = () => {
         setVolume(0);
     }, []);
 
+    useEffect(() => {
+        const handleVisibilityChange = async () => {
+            if (document.visibilityState === 'visible') {
+                if (isConnectedRef.current) await requestWakeLock();
+                if (audioContextRef.current?.state === 'suspended') await audioContextRef.current.resume();
+            }
+        };
+        const handlePageHide = () => {
+            if (isConnectedRef.current) {
+                disconnect("pagehide");
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        window.addEventListener('pagehide', handlePageHide);
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            window.removeEventListener('pagehide', handlePageHide);
+        };
+    }, [disconnect]);
+
     const connect = async () => {
         // Strict Atomic Guard: Don't allow multiple connection attempts
         if (connectionState !== ConnectionState.DISCONNECTED || isConnectedRef.current) {
@@ -153,27 +163,20 @@ export const useGeminiLive = () => {
         setConnectionState(ConnectionState.CONNECTING);
         addLog("Obtendo permissão de acesso...", 'system');
 
-        let apiKey = '';
-        try {
-            if (!supabase) throw new Error("Supabase não configurado. Verifique as variáveis de ambiente VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no GitHub.");
-
-            const { data, error } = await supabase
-                .from('secrets')
-                .select('value')
-                .eq('name', 'GEMINI_API_KEY')
-                .single();
-
-            if (error || !data) throw error || new Error("Chave não encontrada no banco");
-            apiKey = data.value;
-        } catch (err: any) {
-            console.error("Erro ao buscar a chave no Supabase:", err);
-            addLog(`Erro: ${err.message || 'Falha ao autenticar a IA.'}`, 'system');
-            setConnectionState(ConnectionState.DISCONNECTED);
-            return;
+        let apiKey = (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
+        if (!apiKey && db) {
+            try {
+                const secretDoc = await getDoc(doc(db, 'secrets', 'GEMINI_API_KEY'));
+                if (secretDoc.exists()) {
+                    apiKey = secretDoc.data()?.value || '';
+                }
+            } catch (err: any) {
+                console.warn("Erro ao buscar a chave no Firebase Firestore:", err);
+            }
         }
 
         if (!apiKey) {
-            addLog("Chave da API não configurada corretamente no sistema.", 'system');
+            addLog("Chave da API Gemini não configurada (VITE_GEMINI_API_KEY ou Firebase).", 'system');
             setConnectionState(ConnectionState.DISCONNECTED);
             return;
         }
