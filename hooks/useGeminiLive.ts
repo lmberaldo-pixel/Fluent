@@ -164,16 +164,20 @@ export const useGeminiLive = () => {
         setConnectionState(ConnectionState.CONNECTING);
         addLog("Obtendo permissão de acesso...", 'system');
 
-        let apiKey = (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
-        if (!apiKey && db) {
+        let apiKey = '';
+        if (db) {
             try {
                 const secretDoc = await getDoc(doc(db, 'secrets', 'GEMINI_API_KEY'));
-                if (secretDoc.exists()) {
-                    apiKey = secretDoc.data()?.value || '';
+                if (secretDoc.exists() && secretDoc.data()?.value) {
+                    apiKey = secretDoc.data().value;
                 }
             } catch (err: any) {
                 console.warn("Erro ao buscar a chave no Firebase Firestore:", err);
             }
+        }
+
+        if (!apiKey) {
+            apiKey = (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
         }
 
         if (!apiKey) {
